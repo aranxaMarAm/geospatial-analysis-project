@@ -1,0 +1,11 @@
+---
+title: "Geospatial Final Project"
+author: "Aranxa Márquez Ampudia & Milton Mier Santander"
+date: "2025-05-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
