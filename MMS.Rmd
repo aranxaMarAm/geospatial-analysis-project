@@ -100,6 +100,15 @@ head(mun)
 str(mun)
 
 
+
+mun_sf <- geojson_sf("Colombia_departamentos_municipios_poblacion-topov2.json")
+
+
+ggplot(mun_sf) +
+  geom_sf(fill = "lightblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Municipalities")
+
 ```
 ## Including Plots
 
