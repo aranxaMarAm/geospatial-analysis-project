@@ -9,3 +9,316 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+# Load Packages
+
+library(sf) |> suppressMessages() # for spatial vector data
+library(dplyr) |> suppressMessages()
+library(tidyr)
+library(stringr)
+library (terra) # for spatial data analysis with vector and raster data
+library(tmap) # for static and interactive maps
+library(spdep) # for spatial dependency (session 6)
+library(leaflet) # for interactive maps
+library(units) |> suppressMessages() # for measurement units in R vectors, matrices and arrays automatic propagation, conversion, derivation and simplification of units
+library(giscoR)
+library(arrow)
+library(jsonlite)
+library(geojsonsf)
+library(geojsonio)
+library(spatialreg)
+
+
+if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus") 
+
+```
+
+
+```{r}
+# Load data
+
+zip_filename <- "final_df.zip"
+csv_filename <- "../final_df.csv"
+
+# Temporary directory
+temp_dir <- tempdir()
+
+# Extract the specific CSV file to temp dir
+unzip(zipfile = zip_filename, files = csv_filename, exdir = temp_dir)
+
+# Extracted file will retain directory structure, verify exact path:
+extracted_file_path <- file.path(temp_dir, csv_filename)
+
+# Normalize path (since "../" could cause issues)
+extracted_file_path <- normalizePath(extracted_file_path, mustWork = FALSE)
+
+# Check if extraction succeeded:
+if (!file.exists(extracted_file_path)) {
+    stop("Extraction failed. Check filenames and paths.")
+}
+```
+
+```{r}
+# Read the CSV into a dataframe
+final_df <- read.csv(extracted_file_path)
+
+# Clean up by deleting the file
+file.remove(extracted_file_path)
+```
+
+```{r}
+mun <- fromJSON("Colombia_departamentos_municipios_poblacion-topov2.json")
+
+# Preview first few rows or elements
+head(mun)
+
+# Check structure
+```
+
+
+```{r}
+# Read TopoJSON
+muni_sf <- geojson_sf("Colombia_departamentos_municipios_poblacion-topov2.json")
+```
+```{r}
+st_crs(muni_sf) <- 4326
+```
+
+
+```{r}
+# Check number of geometries in original shapefile
+nrow(muni_sf)
+
+# Check number of records in final_df
+nrow(final_df)
+
+# Check join key overlap
+length(intersect(muni_sf$MPIO_CDPMP, final_df$codmpio))
+```
+
+```{r}
+head(final_df)
+```
+
+```{r}
+# Convert both codes to character to ensure matching works
+final_df <- final_df %>%
+  mutate(codmpio = as.character(codmpio))
+
+muni_sf <- muni_sf %>%
+  mutate(MPIO_CCDGO = as.character(MPIO_CDPMP))
+```
+
+
+```{r}
+final_22 <- final_df %>%
+  filter(year == 2022)
+```
+
+```{r}
+muni_sf <- muni_sf %>%
+  mutate(MPIO_CCDGO = str_pad(as.character(MPIO_CDPMP), width = 5, pad = "0"))
+
+final_22 <- final_22 %>%
+  mutate(codmpio = str_pad(as.character(codmpio), width = 5, pad = "0"))
+```
+
+```{r}
+joined_sf <- left_join(muni_sf, final_22, by = c("MPIO_CDPMP" = "codmpio"))
+```
+
+
+```{r}
+# Ensure both are character and padded
+muni_sf <- muni_sf %>%
+  mutate(MPIO_CDPMP = str_pad(as.character(MPIO_CDPMP), width = 5, pad = "0"))
+
+final_22 <- final_df %>%
+  filter(year == 2022) %>%
+  mutate(codmpio = str_pad(as.character(codmpio), width = 5, pad = "0"))
+
+# Join using the correct code
+joined_sf <- left_join(muni_sf, final_22, by = c("MPIO_CDPMP" = "codmpio"))
+
+# Check join success
+sum(!is.na(joined_sf$iica))
+```
+
+
+```{r}
+sf::sf_use_s2(FALSE)
+
+# Filter rows without NAs (just in case)
+joined_clean <- joined_sf %>%
+  filter(!is.na(iica))  # or use H_coca if you prefer
+
+# Create neighbors and weights
+nb <- poly2nb(joined_clean)
+lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+
+# Standardize the variable
+iica_std <- scale(joined_clean$iica)
+
+# Create lagged values
+lag_iica <- lag.listw(lw, iica_std)
+
+# Plot Moran scatter
+plot(iica_std, lag_iica,
+     xlab = "iica (standardized)",
+     ylab = "Spatial lag of iica",
+     main = "Moran Scatter Plot for iica")
+abline(h = 0, v = 0, col = "gray")
+abline(lm(lag_iica ~ iica_std), col = "red")
+
+```
+
+```{r}
+# Run Local Moran's I
+local_iica <- localmoran(joined_clean$iica, lw, zero.policy = TRUE)
+
+# Add cluster type to spatial data
+joined_clean$Ii <- local_iica[,1]               # local Moran's I
+joined_clean$p_Ii <- local_iica[,5]             # p-value
+
+# Quadrant for cluster type
+mean_iica <- mean(joined_clean$iica, na.rm = TRUE)
+mean_lag <- mean(lag.listw(lw, joined_clean$iica), na.rm = TRUE)
+
+joined_clean$quadrant <- NA
+joined_clean$quadrant[
+  joined_clean$iica >= mean_iica & lag.listw(lw, joined_clean$iica) >= mean_lag
+] <- "High-High"
+joined_clean$quadrant[
+  joined_clean$iica <= mean_iica & lag.listw(lw, joined_clean$iica) <= mean_lag
+] <- "Low-Low"
+joined_clean$quadrant[
+  joined_clean$iica >= mean_iica & lag.listw(lw, joined_clean$iica) <= mean_lag
+] <- "High-Low"
+joined_clean$quadrant[
+  joined_clean$iica <= mean_iica & lag.listw(lw, joined_clean$iica) >= mean_lag
+] <- "Low-High"
+
+# Only keep significant values
+joined_clean$quadrant[joined_clean$p_Ii > 0.05] <- NA
+
+```
+
+
+
+
+```{r}
+library(ggplot2)
+
+ggplot(joined_clean) +
+  geom_sf(aes(fill = quadrant), color = NA) +
+  scale_fill_manual(
+    values = c("High-High" = "red", "Low-Low" = "blue",
+               "High-Low" = "orange", "Low-High" = "lightblue"),
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "LISA Cluster Map for iica (2022)",
+    fill = "Cluster Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+# Filter out missing data
+joined_clean_coca <- joined_sf %>%
+  filter(!is.na(H_coca))
+
+# Create neighbors and weights
+nb_coca <- poly2nb(joined_clean_coca)
+lw_coca <- nb2listw(nb_coca, style = "W", zero.policy = TRUE)
+
+# Standardize the variable
+coca_std <- scale(joined_clean_coca$H_coca)
+
+# Create lagged values
+lag_coca <- lag.listw(lw_coca, coca_std)
+
+# Plot Moran scatter
+plot(coca_std, lag_coca,
+     xlab = "H_coca (standardized)",
+     ylab = "Spatial lag of H_coca",
+     main = "Moran Scatter Plot for H_coca")
+abline(h = 0, v = 0, col = "gray")
+abline(lm(lag_coca ~ coca_std), col = "red")
+
+```
+
+
+```{r}
+local_coca <- localmoran(joined_clean_coca$H_coca, lw_coca, zero.policy = TRUE)
+
+# Store results
+joined_clean_coca$Ii <- local_coca[,1]
+joined_clean_coca$p_Ii <- local_coca[,5]
+```
+
+
+```{r}
+mean_coca <- mean(joined_clean_coca$H_coca, na.rm = TRUE)
+mean_lag_coca <- mean(lag.listw(lw_coca, joined_clean_coca$H_coca), na.rm = TRUE)
+
+joined_clean_coca$quadrant <- NA
+joined_clean_coca$quadrant[
+  joined_clean_coca$H_coca >= mean_coca & lag.listw(lw_coca, joined_clean_coca$H_coca) >= mean_lag_coca
+] <- "High-High"
+joined_clean_coca$quadrant[
+  joined_clean_coca$H_coca <= mean_coca & lag.listw(lw_coca, joined_clean_coca$H_coca) <= mean_lag_coca
+] <- "Low-Low"
+joined_clean_coca$quadrant[
+  joined_clean_coca$H_coca >= mean_coca & lag.listw(lw_coca, joined_clean_coca$H_coca) <= mean_lag_coca
+] <- "High-Low"
+joined_clean_coca$quadrant[
+  joined_clean_coca$H_coca <= mean_coca & lag.listw(lw_coca, joined_clean_coca$H_coca) >= mean_lag_coca
+] <- "Low-High"
+
+# Only show significant clusters
+joined_clean_coca$quadrant[joined_clean_coca$p_Ii > 0.05] <- NA
+
+```
+
+
+```{r}
+library(ggplot2)
+
+ggplot(joined_clean_coca) +
+  geom_sf(aes(fill = quadrant), color = NA) +
+  scale_fill_manual(
+    values = c(
+      "High-High" = "red",
+      "Low-Low" = "blue",
+      "High-Low" = "orange",
+      "Low-High" = "lightblue"
+    ),
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "LISA Cluster Map for H_coca (2022)",
+    fill = "Cluster Type"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+# Select relevant variables and filter complete cases
+model_data <- joined_clean_coca %>%
+  select(H_coca, gov_score, equity_index, innovation_index) %>%
+  drop_na()
+```
+
+
+
+
+
+
+
+
+
