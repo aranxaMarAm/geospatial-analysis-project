@@ -239,7 +239,7 @@ lw_coca <- nb2listw(nb_coca, style = "W", zero.policy = TRUE)
 coca_std <- scale(joined_clean_coca$H_coca)
 
 # Create lagged values
-lag_coca <- lag.listw(lw_coca, coca_std)
+lag_coca <- lag.listw(lw_coca, coca_std)  ## checar para después
 
 # Plot Moran scatter
 plot(coca_std, lag_coca,
