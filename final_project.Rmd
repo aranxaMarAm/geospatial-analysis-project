@@ -30,6 +30,7 @@ library(jsonlite)
 library(geojsonsf)
 library(geojsonio)
 library(spatialreg)
+library(gridExtra)
 
 
 if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus") 
@@ -92,7 +93,6 @@ head(muni_sf)
 st_crs(muni_sf) <- 4326
 ```
 
-
 ```{r}
 # Check number of geometries in original shapefile
 nrow(muni_sf)
@@ -103,7 +103,6 @@ nrow(final_df)
 # Check join key overlap
 length(intersect(muni_sf$MPIO_CDPMP, final_df$codmpio))
 ```
-
 
 ```{r}
 # Convert both codes to character to ensure matching works
@@ -134,19 +133,8 @@ joined_sf <- left_join(muni_sf, final_22, by = c("MPIO_CDPMP" = "codmpio"))
 
 
 ```{r}
-# Ensure both are character and padded
-muni_sf <- muni_sf %>%
-  mutate(MPIO_CDPMP = str_pad(as.character(MPIO_CDPMP), width = 5, pad = "0"))
-
-final_22 <- final_df %>%
-  filter(year == 2022) %>%
-  mutate(codmpio = str_pad(as.character(codmpio), width = 5, pad = "0"))
-
-# Join using the correct code
-joined_sf <- left_join(muni_sf, final_22, by = c("MPIO_CDPMP" = "codmpio"))
-
-# Check join success
-sum(!is.na(joined_sf$iica))
+# Moran's I test result for armed conclict 
+moran.test(joined_clean$iica, lw, zero.policy = TRUE)
 ```
 
 
@@ -176,6 +164,9 @@ abline(h = 0, v = 0, col = "gray")
 abline(lm(lag_iica ~ iica_std), col = "red")
 
 ```
+
+The results show that armed conflict presence doesn't occur spatially random, but it clusters geograph
+
 
 ```{r}
 # Run Local Moran's I
@@ -208,6 +199,12 @@ joined_clean$quadrant[joined_clean$p_Ii > 0.05] <- NA
 
 ```
 
+```{r}
+# Moran's I test result
+moran.test(joined_clean$H_coca, lw, zero.policy = TRUE)
+```
+
+
 
 ```{r}
 library(ggplot2)
@@ -217,7 +214,6 @@ ggplot(joined_clean) +
   scale_fill_manual(
     values = c("High-High" = "red", "Low-Low" = "blue",
                "High-Low" = "orange", "Low-High" = "lightblue"),
-    na.value = "grey90"
   ) +
   labs(
     title = "LISA Cluster Map for iica (2022)",
@@ -299,8 +295,7 @@ ggplot(joined_clean_coca) +
       "Low-Low" = "blue",
       "High-Low" = "orange",
       "Low-High" = "lightblue"
-    ),
-    na.value = "grey90"
+    )
   ) +
   labs(
     title = "LISA Cluster Map for H_coca (2022)",
@@ -310,8 +305,60 @@ ggplot(joined_clean_coca) +
 ```
 
 
+```{r}
+
+compute_lisa_clusters <- function(df, var, lw) {
+  local <- localmoran(df[[var]], lw, zero.policy = TRUE)
+  df$Ii <- local[, 1]
+  df$pval <- local[, 5]
+
+  mean_val <- mean(df[[var]], na.rm = TRUE)
+  lag_val <- lag.listw(lw, df[[var]])
+
+  df$cluster <- NA
+  df$cluster[df[[var]] >= mean_val & lag_val >= mean(lag_val)] <- "High-High"
+  df$cluster[df[[var]] <= mean_val & lag_val <= mean(lag_val)] <- "Low-Low"
+  df$cluster[df[[var]] >= mean_val & lag_val <= mean(lag_val)] <- "High-Low"
+  df$cluster[df[[var]] <= mean_val & lag_val >= mean(lag_val)] <- "Low-High"
+  df$cluster[df$pval > 0.05] <- NA  # Remove non-significant
+
+  return(df)
+}
+```
 
 
+```{r}
+# Apply to both
+iica_lisa <- compute_lisa_clusters(joined_clean, "iica", lw)
+coca_lisa <- compute_lisa_clusters(joined_clean_coca, "H_coca", lw_coca)
+```
+
+```{r}
+# Define color palette
+lisa_colors <- c(
+  "High-High" = "#B2182B",   # dark red
+  "Low-Low"   = "#2166AC",   # dark blue
+  "High-Low"  = "#762A83",   # purple
+  "Low-High"  = "#1B9E77"    # teal
+)
+
+p1 <- ggplot(iica_lisa) +
+  geom_sf(aes(fill = cluster), color = "white", size = 0.05) +
+  scale_fill_manual(values = lisa_colors, na.value = "grey90") +
+  labs(title = "LISA Clusters: iica (Conflict Intensity)", fill = "Cluster Type") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+p2 <- ggplot(coca_lisa) +
+  geom_sf(aes(fill = cluster), color = "white", size = 0.05) +
+  scale_fill_manual(values = lisa_colors, na.value = "grey90") +
+  labs(title = "LISA Clusters: H_coca (Coca Cultivation)", fill = "Cluster Type") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+# Display side-by-side
+grid.arrange(p1, p2, ncol = 2)
+```
 
 
 
