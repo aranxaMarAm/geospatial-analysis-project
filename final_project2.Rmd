@@ -168,7 +168,7 @@ gmoran
 ```
 ```{r}
 
-mp <- moran.plot(joined_clean$iica, nbw, labels=F)
+mp <- moran.plot(joined_sf$iica, nbw, labels=F)
 mp
 # spatially lagged values: mp$wx
 
@@ -261,8 +261,6 @@ Now we can create an initial (non-spatial) regression model.
 
 ```{r regression-model}
 
-
-
 # Filter rows without NAs (just in case)
 joined_clean <- joined_sf %>%
   filter(!is.na(iica), iica > 0) %>%
@@ -270,6 +268,11 @@ joined_clean <- joined_sf %>%
   filter(!is.na(H_coca)) %>%
   filter(!is.na(fisc_perf)) %>%
   filter(!is.na(e_desplaza))  
+
+joined_clean2 <- joined_clean |>
+  na.omit()
+
+
 
 # this is our initial regression model 
 formula <- formula(log(iica) ~ gdp_pc + H_coca + fisc_perf + e_desplaza)
@@ -324,18 +327,28 @@ There are three simple models that accommodate spatial effects slightly differen
 
 ```{r slx}
 
-# Check for NAs in spatially lagged variables
-lag_vars <- create_WX(model.matrix(formula, joined_clean), listw = wts, prefix = "lag.")
-summary(as.data.frame(lag_vars))
 
+vars_used <- all.vars(formula(model1))  # Includes dependent + independent variables
+summary(joined_clean[, vars_used])      # Check for NAs, negative values, etc.
 
-# spatially lagged X models
-slx_model <- lmSLX(formula, data = joined_clean, listw = wts)
+class(joined_clean)
+# Should include "sf"
 
+library(spatialreg)
+
+formula <- formula(log(iica) ~ gdp_pc + H_coca + fisc_perf + e_desplaza)
+
+# SLX model (includes spatial lags of X variables only)
+slx_model <- lmSLX(formula, data = joined_clean, listw = wts, zero.policy = TRUE)
 summary(slx_model)
+
+
 ```
 
+```{r}
 
+
+```
 
 
 
