@@ -89,19 +89,10 @@ file.remove(extracted_file_path)
 
 
 
-
-
-mun <- fromJSON("Colombia_departamentos_municipios_poblacion-topov2.json")
+mun_sf <- geojson_sf("Colombia_departamentos_municipios_poblacion-topov2.json")
 
 # Preview first few rows or elements
-head(mun)
-
-# Check structure
-str(mun)
-
-
-
-mun_sf <- geojson_sf("Colombia_departamentos_municipios_poblacion-topov2.json")
+head(mun_sf)
 
 
 ggplot(mun_sf) +
@@ -109,9 +100,70 @@ ggplot(mun_sf) +
   theme_minimal() +
   labs(title = "Municipalities")
 
+
+
+
+
+final_df <- final_df %>%
+  mutate(codmpio = as.character(codmpio))
+
+# Assuming common key is "municipality_id"
+mun_sf_merged <- mun_sf %>%
+  left_join(final_df, by = c("MPIO_CCDGO" = "codmpio"))
+head(mun_sf_merged)
+
 ```
-## Including Plots
 
-You can also embed plots, for example:
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+PROMEDIO POR AÑO
+
+```{r}
+
+final_df_avg <- final_df %>%
+  group_by(codmpio) %>%
+  summarise(gdp_pc = mean(gdp_pc, na.rm = TRUE)) %>%
+  mutate(codmpio = stringr::str_pad(codmpio, 5, pad = "0"))
+
+mun_sf_merged <- mun_sf %>%
+  left_join(final_df_avg, by = c("MPIO_CDPMP" = "codmpio"))
+
+head(mun_sf_merged)
+
+
+library(ggplot2)
+
+ggplot(mun_sf_merged) +
+  geom_sf(aes(fill = gdp_pc), color = "black", size = 0.1) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey90") +
+  theme_minimal() +
+  labs(title = "GDP by Municipality (2022)", fill = "Population")
+
+
+```
+
+
+2022
+
+```{r}
+
+final_df_2022 <- final_df %>%
+  filter(year == 2012) %>%
+  mutate(codmpio = stringr::str_pad(codmpio, 5, pad = "0"))
+
+mun_sf_merged <- mun_sf %>%
+  left_join(final_df_avg, by = c("MPIO_CDPMP" = "codmpio"))
+
+head(mun_sf_merged)
+
+
+library(ggplot2)
+
+ggplot(mun_sf_merged) +
+  geom_sf(aes(fill = gdp_pc), color = "black", size = 0.1) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey90") +
+  theme_minimal() +
+  labs(title = "GDP by Municipality (2022)", fill = "Population")
+
+
+```
