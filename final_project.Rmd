@@ -9,6 +9,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+## Packages to be used
+
 ```{r}
 # Load Packages
 
@@ -33,6 +36,8 @@ if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus")
 
 ```
 
+
+## Load indicators data 
 
 ```{r}
 # Load data
@@ -67,20 +72,23 @@ file.remove(extracted_file_path)
 ```
 
 ```{r}
-mun <- fromJSON("Colombia_departamentos_municipios_poblacion-topov2.json")
+head(final_df)
+```
 
-# Preview first few rows or elements
-head(mun)
+## Load geospatial data 
 
-# Check structure
+```{r}
+# Read GeoJSON
+muni_sf <- geojson_sf("colombia_municipios_poblacion.json")
+```
+
+```{r}
+head(muni_sf)
 ```
 
 
 ```{r}
-# Read TopoJSON
-muni_sf <- geojson_sf("Colombia_departamentos_municipios_poblacion-topov2.json")
-```
-```{r}
+## Assigning manually the Coordinate Reference System (CRS)
 st_crs(muni_sf) <- 4326
 ```
 
@@ -96,9 +104,6 @@ nrow(final_df)
 length(intersect(muni_sf$MPIO_CDPMP, final_df$codmpio))
 ```
 
-```{r}
-head(final_df)
-```
 
 ```{r}
 # Convert both codes to character to ensure matching works
@@ -150,7 +155,7 @@ sf::sf_use_s2(FALSE)
 
 # Filter rows without NAs (just in case)
 joined_clean <- joined_sf %>%
-  filter(!is.na(iica))  # or use H_coca if you prefer
+  filter(!is.na(iica))  
 
 # Create neighbors and weights
 nb <- poly2nb(joined_clean)
@@ -202,8 +207,6 @@ joined_clean$quadrant[
 joined_clean$quadrant[joined_clean$p_Ii > 0.05] <- NA
 
 ```
-
-
 
 
 ```{r}
@@ -307,12 +310,6 @@ ggplot(joined_clean_coca) +
 ```
 
 
-```{r}
-# Select relevant variables and filter complete cases
-model_data <- joined_clean_coca %>%
-  select(H_coca, gov_score, equity_index, innovation_index) %>%
-  drop_na()
-```
 
 
 
