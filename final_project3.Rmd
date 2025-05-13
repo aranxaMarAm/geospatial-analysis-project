@@ -34,6 +34,8 @@ library(geojsonio)
 library(spatialreg)
 library(gridExtra)
 
+library(sf)
+sf_use_s2(FALSE)
 
 if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus") 
 
@@ -327,6 +329,172 @@ formula <- formula(log(iica) ~ gdp_pc + H_coca + fisc_perf + e_desplaza)
 slx_model <- lmSLX(formula, data = joined_clean, listw = wts, zero.policy = TRUE)
 summary(slx_model)
 ```
+You can see now, that there are coefficient estimates for the covariates and the *lagged* covariates.
+
+We need to be careful in the interpretation of coefficients, as there are *direct* and *indirect* effects.
+This we can therefore look at the `impacts`:
+
+```{r slx-impact}
+summary(impacts(slx_model))
+```
+
+We can rerun Moran's I to test if there is still autocorrelation in the residuals:
+
+```{r slx-autoregression}
+moran.test(slx_model$residuals, wts)
+```
+As Moran's I still shows significant autocorrelation, we should assume that we have not yet captured the spatial dependence sufficiently with our model.
+
+
+### 2. Spatial lag models
+
+Spatial lag models account for spatial dependence by including a spatial lag of the outcome variable in the model.
+In doing so, it accounts for spatial spillover effects – the possibility
+that outcome values in neighboring areas have an influence on outcome values in a given location.
+
+We can use the `lagsarlm` function of the `spatialreg` package fir Maximum Likelihood (ML) estimation of the spatial lag model:
+
+```{r slm}
+# spatial lag models
+lag_model <- lagsarlm(
+  formula = formula,
+  data = joined_clean,
+  listw = wts, # taking the same weights as before
+  zero.policy = T
+  )
+summary(lag_model, Nagelkerke = TRUE)
+```
+
+The estimated coefficient Rho (0.57) indicates a positive relationship between neighboring values and this value.
+It is significant, as indicated by the p-value of the asymptotic standard error.
+The fact the lag is significant adds further evidence that this is a better model than the ordinary least squares (OLS) regression specification.
+
+
+Usually, you would be looking at the R Square and compare models.
+Be careful! This R Square is not a real R Square, but a pseudo-R Square and therefore is not comparable to the one we obtain from the OLS regression model.
+
+The Likelihood Ratio test (LR), if significant (as here) indicates that the spatial model is better than the base model *(assesses the goodness of fit of two competing nested statistical models)*.
+The Wald test is a similar test.
+
+LM (Lagrange multiplier) test for residual autocorrelation shows that there is no more significant resiudal autocorrelation.
+
+Note that interpretation of the fitted coefficients should use impact measures, because of the feedback loops induced by the data generation process for this model!
+
+Here, we use Monte Carlo simulation to obtain simulated distributions of the various impacts. (As this is a simulation, values are not deterministic)
+
+
+```{r slm-impacts}
+
+imp <- impacts(lag_model, listw = wts, R=100) # compute impacts
+imp
+```
+
+```{r slm-impacts2}
+#To print the p values
+summary(imp, zstats=T)$pzmat
+```
+
+
+Again, we can rerun Moran's I with the model's residuals: 
+
+```{r slm-morans}
+moran.test(lag_model$residuals, wts)
+```
+Now, we do not have significant autocorrelation left, which is a sign that our model now captures the spatial relationship better.
+
+## Spatial error models
+
+In contrast with spatial lag models, spatial error models include a spatial lag in a model’s error term. This is designed to capture latent spatial processes that are not currently being accounted for in the model estimation and in turn show up in the model’s residuals.
+
+```{r sem}
+error_model <- errorsarlm(
+formula = formula,
+data = joined_clean,
+listw = wts,
+zero.policy = TRUE
+)
+summary(error_model, Nagelkerke = TRUE)
+```
+
+
+
+
+
+
+
+The estimated coefficient Lambda (0.47) indicates a positive relationship between neighboring residuals and this value.
+It is significant, as indicated by the p-value of the asymptotic standard error.
+
+Again, this R Square is not a real R Square, but a pseudo-R Square and therefore is not comparable to the one we obtain from the OLS regression model.
+
+Instead, we can look at the Likelihood Ratio test (LR) on this parameter which is significant, indicating a better model than the base model.
+
+Also, we can look at the Akaike Information Criterion (AIC). Generally: the smaller the better.
+We see that the error model has an AIC of 511.14 whereas the linear model without spatial dependence has an AIC of 673.06, so this is telling us there is a better fit when we include the spatial error.
+
+Here, we can use the estimated coefficients directly and do not need to look at the impacts.
+
+
+Again, we can rerun Moran's I with the model's residuals: 
+
+```{r sem-morans}
+moran.test(error_model$residuals, wts)
+```
+
+As before, with the lag model, there is no significant autocorrelation left. 
+
+
+### Which model is better?
+
+
+#### 1. Lagrange multiplier test
+
+We can also use Lagrange multiplier tests to evaluate the appropriateness of these models together. These tests check for spatial error dependence (LMerr), whether a spatially lagged dependent variable is missing (LMlag), and the robustness of each in the presence of the other (RLMerr, RLMlag - RLMerr tests for error dependence in the possible presence of a missing lagged dependent variable, RLMlag the other way round).
+The `lm.LMtests()` function can be used with an input linear model to compute these tests.
+
+```{r lagrange}
+lm.LMtests(
+  model1,
+  wts,
+  test = c("LMerr", "LMlag")
+  # LM error, LM lag
+)
+```
+
+When both LM test statistics reject the null hypothesis, we need to have a look at the robust version of these tests (Robust LM).
+ 
+ If only one of them are: problem solved. We would choose a spatial lag or a spatial error model according to this (i.e., if the lag LM was significant and the error LM was not we would run a spatial lag model or viceversa).
+
+
+```{r lagrange_robust}
+lm.LMtests(
+  model1,
+  wts,
+  test = c("RLMerr", "RLMlag")
+  # robust LM error, robust LM lag
+)
+```
+While both the lag and error models would be appropriate for this data, the test statistic for the robust version of the lag model is larger, suggesting that the spatial lag model should be preferred over the spatial error model in this example.
+
+#### 2. Akaike Information Criterion (AIC)
+
+Another option would be to compare the log likelihood values: -248.57 for the error model, -202.5978 for the lag model.
+(The log-likelihood value of a regression model is a way to measure the goodness of fit for a model. The higher the value of the log-likelihood, the better a model fits a dataset.)
+However, this is only suitable, if both models have the same number of predictors.
+
+More generally, we can use the Akaike Information Criterion (AIC), which also accounts for the number of estimated parameters in the model.
+(AIC deals with the trade-off between the goodness of fit of the model and the simplicity of the model)
+The smaller the AIC, the better the fit.
+
+
+```{r AIC}
+AIC(model1, lag_model, error_model)
+```
+The AIC also suggests that the lag model is a better fit.
+
+
+
+
 
 ```{r}
 
