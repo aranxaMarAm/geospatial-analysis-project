@@ -31,6 +31,7 @@ library(geojsonsf)
 library(geojsonio)
 library(spatialreg)
 library(gridExtra)
+library(patchwork)
 
 
 if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus") 
@@ -204,7 +205,7 @@ joined_clean$quadrant[joined_clean$p_Ii > 0.05] <- NA
 moran.test(joined_clean$H_coca, lw, zero.policy = TRUE)
 ```
 
-
+Only significant LISA clusters (p < 0.05) are shown. Some quadrants (e.g., Low-Low or High-Low) do not appear due to lack of statistically significant spatial clustering.
 
 ```{r}
 library(ggplot2)
@@ -328,9 +329,46 @@ compute_lisa_clusters <- function(df, var, lw) {
 
 
 ```{r}
+compute_lisa_clusters <- function(df, var, lw) {
+  local <- localmoran(df[[var]], lw, zero.policy = TRUE)
+  df$Ii <- local[, 1]
+  df$pval <- local[, 5]
+  
+  # Compute variable and lag means
+  df$var_std <- df[[var]]
+  df$lag_var <- lag.listw(lw, df$var_std)
+
+  mean_var <- mean(df$var_std, na.rm = TRUE)
+  mean_lag <- mean(df$lag_var, na.rm = TRUE)
+
+  df$cluster <- NA
+  df$cluster[df$var_std >= mean_var & df$lag_var >= mean_lag] <- "High-High"
+  df$cluster[df$var_std <= mean_var & df$lag_var <= mean_lag] <- "Low-Low"
+  df$cluster[df$var_std >= mean_var & df$lag_var <= mean_lag] <- "High-Low"
+  df$cluster[df$var_std <= mean_var & df$lag_var >= mean_lag] <- "Low-High"
+  
+  # Drop non-significant clusters
+  df$cluster[df$pval > 0.05] <- NA
+  
+  return(df)
+}
+```
+
+
+```{r}
 # Apply to both
 iica_lisa <- compute_lisa_clusters(joined_clean, "iica", lw)
 coca_lisa <- compute_lisa_clusters(joined_clean_coca, "H_coca", lw_coca)
+```
+
+
+```{r}
+table(joined_clean$cluster, useNA = "ifany")
+```
+
+
+```{r}
+table(joined_clean_coca$cluster, useNA = "ifany")
 ```
 
 ```{r}
@@ -360,9 +398,94 @@ p2 <- ggplot(coca_lisa) +
 grid.arrange(p1, p2, ncol = 2)
 ```
 
+```{r}
+# If it's GeoJSON:
+dept_sf <- st_read("colombia_departamentos_poblacion.json")
+```
+
+```{r}
+p1 <- p1 + 
+  geom_sf(data = dept_sf, fill = NA, color = "black", size = 0.2)
+
+p2 <- p2 + 
+  geom_sf(data = dept_sf, fill = NA, color = "black", size = 0.2)
+```
 
 
 
+```{r}
+# Disable s2 geometry to avoid issues with poly2nb
+sf::sf_use_s2(FALSE)
+
+# Read department-level boundaries
+dept_sf <- st_read("colombia_departamentos_poblacion.json")
+
+# Define color palette
+lisa_colors <- c(
+  "High-High" = "#d73027",   # red
+  "Low-Low"   = "#4575b4",   # blue
+  "High-Low"  = "#984ea3",   # purple
+  "Low-High"  = "#1b9e77"    # teal
+)
+
+# Function to compute LISA clusters
+compute_lisa_clusters <- function(df, var, lw) {
+  local <- localmoran(df[[var]], lw, zero.policy = TRUE)
+  df$Ii <- local[, 1]
+  df$pval <- local[, 5]
+
+  mean_val <- mean(df[[var]], na.rm = TRUE)
+  lag_val <- lag.listw(lw, df[[var]])
+
+  df$cluster <- NA
+  df$cluster[df[[var]] >= mean_val & lag_val >= mean(lag_val)] <- "High-High"
+  df$cluster[df[[var]] <= mean_val & lag_val <= mean(lag_val)] <- "Low-Low"
+  df$cluster[df[[var]] >= mean_val & lag_val <= mean(lag_val)] <- "High-Low"
+  df$cluster[df[[var]] <= mean_val & lag_val >= mean(lag_val)] <- "Low-High"
+  df$cluster[df$pval > 0.05] <- NA
+
+  return(df)
+}
+
+# Prepare LISA inputs
+joined_iica <- joined_sf %>% filter(!is.na(iica))
+joined_coca <- joined_sf %>% filter(!is.na(H_coca))
+
+nb_iica <- poly2nb(joined_iica)
+lw_iica <- nb2listw(nb_iica, style = "W", zero.policy = TRUE)
+
+nb_coca <- poly2nb(joined_coca)
+lw_coca <- nb2listw(nb_coca, style = "W", zero.policy = TRUE)
+
+# Compute clusters
+iica_lisa <- compute_lisa_clusters(joined_iica, "iica", lw_iica)
+coca_lisa <- compute_lisa_clusters(joined_coca, "H_coca", lw_coca)
+
+# Create plots
+p1 <- ggplot(iica_lisa) +
+  geom_sf(aes(fill = cluster), color = "white", size = 0.05) +
+  geom_sf(data = dept_sf, fill = NA, color = "black", size = 0.2) +
+  scale_fill_manual(values = lisa_colors, na.value = "grey90") +
+  labs(title = "LISA Clusters: iica (Conflict Intensity)", fill = "Cluster Type") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+p2 <- ggplot(coca_lisa) +
+  geom_sf(aes(fill = cluster), color = "white", size = 0.05) +
+  geom_sf(data = dept_sf, fill = NA, color = "black", size = 0.2) +
+  scale_fill_manual(values = lisa_colors, na.value = "grey90") +
+  labs(title = "LISA Clusters: H_coca (Coca Cultivation)", fill = "Cluster Type") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+# Combine plots with patchwork
+(p1 + p2) + 
+  plot_layout(ncol = 2) +
+  plot_annotation(
+    title = "Spatial Clusters of Conflict and Coca Cultivation in Colombia",
+    theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+  )
+```
 
 
 
