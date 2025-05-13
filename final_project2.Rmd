@@ -10,7 +10,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-# Packages to be used
+# Set up
+
+## Packages to be used
 
 ```{r}
 # Load Packages
@@ -38,7 +40,7 @@ if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus")
 ```
 
 
-# Load indicators data 
+## Load indicators data 
 
 ```{r}
 # Load data
@@ -74,7 +76,7 @@ file.remove(extracted_file_path)
 head(final_df)
 ```
 
-# Load geospatial data 
+## Load geospatial data 
 
 ```{r}
 # Read GeoJSON
@@ -136,24 +138,20 @@ joined_sf <- left_join(muni_sf, final_22, by = c("MPIO_CDPMP" = "codmpio"))
 
 # Spatial Autocorrelation
 
-## 
-
+## Handling missing values
 ```{r}
-
 # drop all areas with NA values
 joined_sf <- joined_sf |> filter(!is.na(iica))
   
 #S1: unemployment rate in percentage
 qtm(joined_sf, fill="iica", fill.scale=tm_scale(values="viridis", n=10))
-
 ```
 
-## Moran test
+## Moran's I Test
 
 ```{r}
-
 # first we again define the neighbors
-# in this case, we consider direct neigbors
+# in this case, we consider direct neighbors
 nb <- poly2nb(joined_sf, queen = TRUE)
 
 # the we create weights for the neighbors with style: row standardized
@@ -164,14 +162,13 @@ gmoran <- moran.test(joined_sf$iica, nbw,
                      alternative = "greater")
 
 gmoran
-
 ```
-```{r}
 
+
+```{r}
 mp <- moran.plot(joined_sf$iica, nbw, labels=F)
 mp
 # spatially lagged values: mp$wx
-
 ```
 
 ## Local Moran's I
@@ -204,11 +201,10 @@ tm_shape(joined_sf) +
     labels = c("Negative SAC","Positive SAC"),
     textNA = "not significant")
   )
-
 ```
 
 
-### Clusters
+## Identifying Clusters
 
 Local Moran’s I allows us to identify clusters of the following types:
 
@@ -228,8 +224,9 @@ levels(joined_sf$quadr) <- c(levels(joined_sf$quadr), "non-significant")
 joined_sf[(joined_sf$lmp >= 0.05) & !is.na(joined_sf$lmp), "quadr"] <- "non-significant"
 ```
 
-Plot the significant quadrants:
+# Visualisations
 
+## Significant quadrants:
 ```{r moransI-local-clusters-plot}
 tm_shape(joined_sf) + 
   tm_polygons(
@@ -239,13 +236,7 @@ tm_shape(joined_sf) +
 ```
 
 
-
-#
-
-
-
-
-First, we can plot the distribution of the outcome variable.
+## Distribution of the outcome variable
 
 ```{r outcome-variable}
 hist(joined_sf$iica, nclass=50)
@@ -256,11 +247,11 @@ hist(log(joined_sf$iica), nclass=50)
 ```
 
 
+# Regression models
 
-Now we can create an initial (non-spatial) regression model.
+## Initial (non-spatial) regression model.
 
 ```{r regression-model}
-
 # Filter rows without NAs (just in case)
 joined_clean <- joined_sf %>%
   filter(!is.na(iica), iica > 0) %>%
@@ -272,14 +263,11 @@ joined_clean <- joined_sf %>%
 joined_clean2 <- joined_clean |>
   na.omit()
 
-
-
 # this is our initial regression model 
 formula <- formula(log(iica) ~ gdp_pc + H_coca + fisc_perf + e_desplaza)
 
 model1 <- lm(formula = formula, data = joined_clean, na.action = na.omit)
 summary(model1)
-
 ```
 
 
@@ -322,12 +310,9 @@ Therefore, we need models that can account for such spatial autocorrelation.
 
 There are three simple models that accommodate spatial effects slightly different. The first is the spatially lagged X models:
 
-## Spatially lagged X models 
-
+## 1. Spatially lagged X models 
 
 ```{r slx}
-
-
 vars_used <- all.vars(formula(model1))  # Includes dependent + independent variables
 summary(joined_clean[, vars_used])      # Check for NAs, negative values, etc.
 
@@ -341,8 +326,6 @@ formula <- formula(log(iica) ~ gdp_pc + H_coca + fisc_perf + e_desplaza)
 # SLX model (includes spatial lags of X variables only)
 slx_model <- lmSLX(formula, data = joined_clean, listw = wts, zero.policy = TRUE)
 summary(slx_model)
-
-
 ```
 
 ```{r}
