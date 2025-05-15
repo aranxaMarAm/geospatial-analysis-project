@@ -1,7 +1,7 @@
 ---
 title: "Geospatial Final Project"
 author: "Aranxa Márquez Ampudia & Milton Mier Santander"
-date: "2025-05-09"
+date: "2025-05-14"
 output: html_document
 ---
 
@@ -9,23 +9,16 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
-# Set up
-
-## Packages to be used
-
-```{r}
-# Load Packages
-
-library(sf) |> suppressMessages() # for spatial vector data
+```{r load packages, include=FALSE}
+library(sf) |> suppressMessages() 
 library(dplyr) |> suppressMessages()
 library(tidyr)
 library(stringr)
-library (terra) # for spatial data analysis with vector and raster data
-library(tmap) # for static and interactive maps
-library(spdep) # for spatial dependency (session 6)
-library(leaflet) # for interactive maps
-library(units) |> suppressMessages() # for measurement units in R vectors, matrices and arrays automatic propagation, conversion, derivation and simplification of units
+library (terra) 
+library(tmap) 
+library(spdep) 
+library(leaflet)
+library(units) |> suppressMessages()
 library(giscoR)
 library(arrow)
 library(jsonlite)
@@ -33,12 +26,8 @@ library(geojsonsf)
 library(geojsonio)
 library(spatialreg)
 library(gridExtra)
-
 library(sf)
 sf_use_s2(FALSE)
-
-if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus") 
-
 ```
 
 
@@ -46,7 +35,6 @@ if (!require("tidycensus", quietly = TRUE)) install.packages("tidycensus")
 
 ```{r}
 # Load data
-
 zip_filename <- "final_df.zip"
 csv_filename <- "../final_df.csv"
 
