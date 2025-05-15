@@ -22,6 +22,7 @@ This analysis was made as part of the course **GRAD-E1457 - Geospatial Analysis 
 ## Contribution Statement
 
 All authors contributed equally in the research design and coding.
+
 ------------------------------------------------------------------------
 
 ## Acknowledgments
