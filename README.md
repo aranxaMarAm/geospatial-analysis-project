@@ -11,7 +11,6 @@ This project investigates the spatial dynamics of armed conflict in Colombia by 
 ---
 
 ------------------------------------------------------------------------
-
 **Authors:**\
 [Milton Mier Santander](https://github.com/Milton0215) \| [Aranxa Márquez Ampudia](https://github.com/aranxaMarAm) 
 
@@ -20,20 +19,13 @@ This project investigates the spatial dynamics of armed conflict in Colombia by 
 This analysis was made as part of the course **GRAD-E1457 - Geospatial Analysis for Data Science**, taught by Prof. [Alexandra Kapp](https://scholar.google.de/citations?user=Uq5J4p8AAAAJ) in the [Hertie School Master of Data Science for Public Policy](https://www.hertie-school.org/en/mds) Program
 
 ------------------------------------------------------------------------
-
-
 ## Contribution Statement
 
 All authors contributed equally in the research design and coding.
-
 ------------------------------------------------------------------------
-
 ## Acknowledgments
 
--   **[DNP](https://www.dnp.gov.co/Prensa_/Noticias/Paginas/conozca-las-ciudades-departamentos-y-municipios-mas-modernos-del-pais-de-acuerdo-con-indice-del-dnp.aspx)** (Departamento de Planeación de Colombia) for the data
--   **IBGE** 2022 Census team for open micro-data & shapefiles.
--   **R-Spatial** community for `sf`, `spdep`, and `spatialreg`.
-
+-   **[DNP](https://www.dnp.gov.co/Prensa_/Noticias/Paginas/conozca-las-ciudades-departamentos-y-municipios-mas-modernos-del-pais-de-acuerdo-con-indice-del-dnp.aspx)** (Departamento de Planeación de Colombia) for the data.
 ------------------------------------------------------------------------
 
 <sub><sup>Questions or ideas? Open an issue!</sup></sub>
