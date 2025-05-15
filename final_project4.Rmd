@@ -1,5 +1,5 @@
 ---
-title: "Geospatial Final Project"
+title: "Geospatial Analysis Final Project"
 author: "Aranxa Márquez Ampudia & Milton Mier Santander"
 date: "2025-05-14"
 output: html_document
@@ -14,7 +14,7 @@ library(sf) |> suppressMessages()
 library(dplyr) |> suppressMessages()
 library(tidyr)
 library(stringr)
-library (terra) 
+library(terra) 
 library(tmap) 
 library(spdep) 
 library(leaflet)
@@ -23,16 +23,19 @@ library(giscoR)
 library(arrow)
 library(jsonlite)
 library(geojsonsf)
+library(ggplot2)
 library(geojsonio)
 library(spatialreg)
 library(gridExtra)
 library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
 sf_use_s2(FALSE)
 ```
 
+# Getting the data
 
-## Load indicators data 
-
+### Load indicators data 
 ```{r}
 # Load data
 zip_filename <- "final_df.zip"
@@ -66,7 +69,7 @@ file.remove(extracted_file_path)
 head(final_df)
 ```
 
-## Load geospatial data 
+### Load geospatial data 
 
 ```{r}
 # Read GeoJSON
@@ -90,8 +93,7 @@ length(intersect(muni_sf$MPIO_CDPMP, final_df$codmpio))
 ```
 
 
-# Preprocessing
-
+# Preparing the data
 ```{r}
 # Convert both codes to character to ensure matching works
 final_df <- final_df %>%
@@ -101,16 +103,15 @@ muni_sf <- muni_sf %>%
   mutate(MPIO_CCDGO = as.character(MPIO_CDPMP))
 ```
 
-
-## Filter for 2022
-
 ```{r}
+# Filter for 2022
+
 final_22 <- final_df %>%
   filter(year == 2022)
 ```
 
-
 ```{r}
+# Clean names
 muni_sf <- muni_sf %>%
   mutate(MPIO_CCDGO = str_pad(as.character(MPIO_CDPMP), width = 5, pad = "0"))
 
@@ -118,44 +119,83 @@ final_22 <- final_22 %>%
   mutate(codmpio = str_pad(as.character(codmpio), width = 5, pad = "0"))
 ```
 
-
-## Join datasets
-
 ```{r}
+# Join data sets
 joined_sf <- left_join(muni_sf, final_22, by = c("MPIO_CDPMP" = "codmpio"))
 ```
 
-
 # Spatial Autocorrelation
 
-## Handling missing values
+## 1. Handling missing values
 ```{r}
 # drop all areas with NA values
 joined_sf <- joined_sf |> filter(!is.na(iica))
 ```
 
-## Mapping Conflict Incidence (iica)
-
+## 2. Visualizing Conflict Incidence (iica)
 We visualized the distribution of the conflict index (iica) across Colombian municipalities using a choropleth map. The color gradient represents normalized conflict intensity, ranging from low (dark purple) to high (yellow).
 
-This map reveals clear spatial heterogeneity in conflict levels, with notable clusters of high intensity in the Pacific region, southern Colombia, and areas near the Venezuelan border. These visual patterns suggest the presence of spatial autocorrelation, which we test formally in the next section using Moran’s I statistic.
+```{r}
+# 1. Load Colombia + neighbors
+world <- ne_countries(scale = "medium", returnclass = "sf")
+neighbors_sf <- world %>%
+  filter(admin %in% c("Panama", "Ecuador", "Peru", "Brazil", "Venezuela"))
 
+# Manually adjusted label position
+manual_labels <- data.frame(
+  admin = c("Panama", "Ecuador", "Peru", "Brazil", "Venezuela"),
+  lon = c(-80.5, -78.5, -75.8, -66.0, -67.0),
+  lat = c(10.3, -1.0, -5.0, -1.5, 9.5)
+)
 
-```{r}  
-#S1: unemployment rate in percentage
-qtm(joined_sf, fill="iica", fill.scale=tm_scale(values="viridis", n=10))
+manual_labels_sf <- st_as_sf(manual_labels, coords = c("lon", "lat"), crs = st_crs(neighbors_sf)) 
+
+# 3. Create bounding box around Colombia (with buffer)
+colombia_bbox <- st_bbox(joined_sf) %>%
+  st_as_sfc() %>%
+  st_buffer(dist = 2)  # degrees; adjust if needed
+
+# 4. Crop neighbors to bbox
+neighbors_crop <- st_intersection(neighbors_sf, colombia_bbox)
+
+# 5. Remove any missing values from joined_sf
+joined_sf_clean <- joined_sf %>% filter(!is.na(iica))
+
+# 6. Plot the map
+tmap_options(component.autoscale = FALSE)
+
+tm_shape(neighbors_crop) +
+  tm_borders(col = "black", lwd = 1.2) +
+
+tm_shape(joined_sf_clean, is.master = TRUE) +
+  tm_polygons(
+    col = "iica",
+    palette = "viridis",
+    n = 10,
+    title = "Conflict Intensity",
+    na.value = NA,
+    legend.show.na = FALSE
+  ) +
+
+tm_shape(manual_labels_sf) +
+  tm_text("admin", size = 0.95, col = "black", fontface = "plain") +
+
+tm_layout(
+  main.title = "Conflict Intensity in Colombia",
+  legend.outside = TRUE,
+  legend.outside.position = "right",
+  outer.margins = c(0.02, 0.15, 0.02, 0.02),
+  inner.margins = c(0.05, 0.05, 0.05, 0.05)
+)
 ```
+
+This map reveals clear spatial heterogeneity in conflict levels, with notable clusters of high intensity in the Pacific region, southern Colombia, and areas near the Venezuelan and Ecuador's border. These visual patterns suggest the presence of spatial autocorrelation, which we test formally in the next section using Moran’s I statistic.
+
 
 ## Spatial Autocorrelation Test — Moran’s I
 
-To formally assess the presence of spatial autocorrelation in conflict incidence, we computed Moran’s I statistic using a spatial weights matrix (nbw) based on municipality contiguity. The test evaluates whether similar values of iica (conflict intensity) cluster together in space more than expected by chance.
-
-Interpretation:
-The Moran’s I value of 0.53 is strongly positive, indicating a high degree of spatial clustering in conflict levels.
-
-The p-value < 2.2e-16 confirms this result is statistically significant — we reject the null hypothesis of spatial randomness.
-
-This justifies the use of spatial regression models in the next steps, as standard OLS would violate the independence assumption.
+To formally assess the presence of spatial autocorrelation in conflict incidence, we computed Moran’s I statistic using a spatial weights matrix (nbw) based on *municipality contiguity*. 
+The test evaluates whether similar values of iica (conflict intensity) cluster together in space more than expected by chance.
 
 ```{r}
 # first we again define the neighbors
@@ -171,58 +211,39 @@ gmoran <- moran.test(joined_sf$iica, nbw,
 
 gmoran
 ```
-Moran’s I Scatterplot
+## Interpretation
+The Moran’s I value of 0.53 is strongly positive, indicating a high degree of spatial clustering in conflict levels.
 
-To visualize the spatial autocorrelation in conflict incidence, we plotted a Moran scatterplot, which compares each municipality’s conflict value (iica) to the spatially lagged average of its neighbors.
+The p-value < 2.2e-16 confirms this result is statistically significant — therefore, we reject the null hypothesis of spatial randomness.
 
-This plot is divided into four quadrants:
+This justifies the use of spatial regression models in the next steps, as standard OLS would violate the independence assumption.
 
-Top right (High–High): Municipalities with high conflict levels surrounded by others with high conflict.
+# Moran’s I Scatterplot
 
-Bottom left (Low–Low): Municipalities with low conflict levels surrounded by others with low conflict.
-
-Top left (Low–High): Municipalities with low conflict values, but surrounded by high-conflict neighbors (potential outliers or transition zones).
-
-Bottom right (High–Low): Municipalities with high conflict values but low-conflict neighbors.
-
-The upward-sloping red line confirms the positive spatial autocorrelation already identified through Moran’s I — municipalities tend to resemble their neighbors in terms of conflict intensity.
-
-
+To visualize the spatial autocorrelation in conflict incidence, we visualized a Moran's scatterplot, which compares each municipality’s conflict value (iica) to the spatially lagged average of its neighbors.
 
 ```{r}
 mp <- moran.plot(joined_sf$iica, nbw, labels=F)
-mp
 # spatially lagged values: mp$wx
 ```
+This plot is divided into four quadrants:
 
-## Local Indicators of Spatial Association (LISA)(Local Moran's I)
+- *Top right (High–High):* Municipalities with high conflict levels surrounded by others with high conflict.
+- *Bottom left (Low–Low):* Municipalities with low conflict levels surrounded by others with low conflict.
+- *Top left (Low–High):* Municipalities with low conflict values, but surrounded by high-conflict neighbors (potential outliers or transition zones).
+- *Bottom right (High–Low):* Municipalities with high conflict values but low-conflict neighbors.
 
-To explore where spatial autocorrelation occurs, we computed Local Moran’s I statistics. While the global Moran’s I indicates whether clustering exists overall, Local Moran’s I (LISA) identifies specific municipalities that exhibit significant local clustering of conflict levels.
+The upward-sloping line confirms the positive spatial autocorrelation already identified through Moran’s I — municipalities tend to resemble their neighbors in terms of conflict intensity.
+
+
+## Local Indicators of Spatial Associatiom (LISA) using Local Moran's I
+To further explore where spatial autocorrelation occurs, we computed Local Moran’s I statistics. While the global Moran’s I indicates whether clustering exists overall, Local Moran’s I identifies specific municipalities that exhibit *significant local clustering of conflict levels*.
 
 ```{r moransI-local}
 lmoran <- localmoran(joined_sf$iica, nbw, alternative = "two.sided")
 head(lmoran)
 ```
-
-To explore where spatial autocorrelation occurs, we computed Local Moran’s I statistics. While the global Moran’s I indicates whether clustering exists overall, Local Moran’s I (LISA) identifies specific municipalities that exhibit significant local clustering of conflict levels.
-
 We now display results for the two-sided test (H1: positive or negative spatial autocorrelation), only considering p values below 0.05 as significant.
-
-
-Map 1: Local Moran’s I Statistic
-- Areas in darker green show higher positive spatial autocorrelation (lmI_sign).
-- Purple tones suggest negative local spatial association.
-- Most significant clusters appear along the Pacific coast, northeast, and border regions.
-
-Map 2: Classification of Significant Spatial Autocorrelation
-- We classified municipalities with significant local Moran’s I into:
-- Positive SAC (green): High values surrounded by high values or low by low.
-- Negative SAC (purple): High values surrounded by low values or vice versa.
-
-Interpretation:
-- Positive spatial autocorrelation dominates, especially in conflict-heavy regions like the Pacific and northeast.
-- This confirms that conflict incidence is not randomly distributed, but spatially clustered.
-- These spatial patterns help justify the need for regional policy coordination and the use of spatial econometric models in the next section.
 
 ```{r moransI-local-map}
 joined_sf$lmI <- lmoran[, "Ii"] # local Moran's I
@@ -230,73 +251,113 @@ joined_sf$lmI <- lmoran[, "Ii"] # local Moran's I
 joined_sf$lmp <- lmoran[, "Pr(z != E(Ii))"]
 joined_sf$lmI_sign <- joined_sf$lmI
 #joined_sf[joined_sf$lmp >= 0.05, "lmI_sign"] <- NA
-
-qtm(joined_sf, fill="lmI_sign")
-
-tm_shape(joined_sf) + 
-  tm_polygons(
-  fill = "lmI_sign",
-  fill.legend = tm_legend(title = "spatial autocorrelation"),
-  fill.scale=tm_scale(
-    breaks = c(min(joined_sf$lmI_sign, na.rm=T), 0, max(joined_sf$lmI_sign, na.rm=T)),
-    labels = c("Negative SAC","Positive SAC"),
-    textNA = "not significant")
-  )
 ```
 
+```{r}
+## Visualize statistical significant values
+tm_shape(joined_sf) +
+  tm_polygons(
+    fill = "lmI_sign",
+    fill.scale = tm_scale_intervals(
+      breaks = c( -5, 0, 5, 10, 15, 20, 25, 30, 35),
+      labels = c( "-5 to 0", "0 to 5", "5 to 10",
+        "10 to 15", "15 to 20", "20 to 25", "25 to 30", "30 to 35"
+      ),
+      values = colorRampPalette(c("purple", "gray90", "darkgreen"))(14),
+      label.na = "Not Significant"
+    ),
+    fill.legend = tm_legend(title = "Local Moran's I")
+  ) +
+  tm_title("Local Moran’s I: Spatial Autocorrelation")
+```
 
-## Identifying Local Spatial Clusters
+### Local Moran’s I: Spatial Autocorrelation
+- Areas in darker green show higher positive spatial autocorrelation (lmI_sign).
+- Purple tones suggest negative local spatial association.
+- Most significant clusters appear along the Pacific coast, northeast, and border regions.
+
+
+```{r}
+tm_shape(joined_sf) + 
+  tm_polygons(
+    fill = "lmI_sign",
+    fill.scale = tm_scale(
+      breaks = c(min(joined_sf$lmI_sign, na.rm = TRUE), 0, max(joined_sf$lmI_sign, na.rm = TRUE)),
+      labels = c("Negative SAC", "Positive SAC"),
+      textNA = "Not Significant"
+    )
+  ) +
+  tm_title("Spatial Autocorrelation (Positive and Negative Clusters)")
+```
+
+### Spatial Autocorrelation (Positive and Negative Clusters)
+- We classified municipalities with significant local Moran’s I into:
+- Positive SAC (green): High values surrounded by high values or low by low.
+- Negative SAC (purple): High values surrounded by low values or vice versa.
+
+### Interpretation
+- Positive spatial autocorrelation dominates, especially in conflict-heavy regions like the Pacific and northeast.
+- This confirms that conflict incidence is not randomly distributed, but spatially clustered.
+- These spatial patterns help justify the need for regional policy coordination and the use of spatial econometric models in the next section.
+
+# Identifying Local Spatial Clusters
 To better understand how conflict clusters spatially, we classified municipalities using Local Moran’s I quadrants. This typology helps distinguish between core hotspots, outliers, and areas of low conflict intensity.
 
 Quadrant Categories:
-🔴 High–High (Hotspots): Municipalities with high conflict, surrounded by high-conflict neighbors.
-🔵 Low–Low (Coldspots): Low-conflict municipalities surrounded by similarly low-conflict areas.
-🟦 Low–High (Spatial Outliers): Low-conflict municipalities surrounded by high-conflict neighbors.
-🩷 High–Low (Spatial Outliers): High-conflict municipalities surrounded by low-conflict neighbors.
-⚪ Non-significant: No statistically significant local autocorrelation (p ≥ 0.05).
 
-Identifying Clusters
-Local Moran’s I allows us to identify clusters of the following types:
+- High–High (Hotspots): Municipalities with high conflict, surrounded by high-conflict neighbors.
 
--   High-High: areas of high values with neighbors of high values,
--   High-Low: areas of high values with neighbors of low values,
--   Low-High: areas of low values with neighbors of high values,
--   Low-Low: areas of low values with neighbors of low values.
+- Low–Low (Coldspots): Low-conflict municipalities surrounded by similarly low-conflict areas.
 
-Map: Local Conflict Clusters by Moran's Quadrant
-This map highlights regional conflict hotspots in:
-- The Pacific coast, southwest, and northeast, dominated by High–High clusters, indicating strong and persistent spatial patterns of violence.
-- Some municipalities appear as spatial outliers (Low–High or High–Low), possibly signaling transitional or volatile zones.
+- Low–High (Spatial Outliers): Low-conflict municipalities surrounded by high-conflict neighbors.
+
+- High–Low (Spatial Outliers): High-conflict municipalities surrounded by low-conflict neighbors.
+
+- Non-significant: No statistically significant local autocorrelation (p ≥ 0.05).
+
+# Visualisations
 
 ```{r moransI-local-clusters}
-
 # scale such that mean is 0
 #mp <- moran.plot(as.vector(scale(la_income$estimate)), nbw)
-
 # get quadrant information
 joined_sf$quadr <- attributes(lmoran)$quadr$mean
 levels(joined_sf$quadr) <- c(levels(joined_sf$quadr), "non-significant")
 joined_sf[(joined_sf$lmp >= 0.05) & !is.na(joined_sf$lmp), "quadr"] <- "non-significant"
 ```
 
-# Visualisations
 
-## Significant quadrants:
-```{r moransI-local-clusters-plot}
-tm_shape(joined_sf) + 
-  tm_polygons(
-    fill = "quadr",
-    fill.scale=tm_scale(values = c("blue", "lightpink", "skyblue2", "red", "white"))
-)
+## Significant quadrants
+```{r}
+ggplot(joined_sf) +
+  geom_sf(aes(fill = quadr)#, color = NA
+          ) +
+  scale_fill_manual(
+    values = c("High-High" = "#f1bf88","Low-High" = "#9c7346"),
+    na.value = "#e4e0dc"
+  ) +
+  labs(
+    title = "Moran's I Local Cluster Map for Colombia's Armed Conflict Index 2022",
+    fill = "Cluster Type"
+  ) +
+  theme_minimal()
 ```
+Note: Only significant clusters (p<0.05) are shown.
+
+
+This map highlights regional conflict hotspots in:
+
+- The Pacific coast, southwest, and northeast, dominated by High–High clusters, indicating strong and persistent spatial patterns of violence.
+
+- Some municipalities appear as spatial outliers (Low–High or High–Low), possibly signaling transitional or volatile zones.
 
 ## Distribution of the Outcome Variable
 
-We first examined the distribution of the outcome variable, iica — an index measuring armed conflict incidence at the municipal level in 2022.
+We first examined the distribution of the outcome variable, **iica** — an index measuring armed conflict incidence at the municipal level in 2022.
 
-As shown in the histogram, the distribution of iica is heavily right-skewed, with the vast majority of municipalities reporting very low conflict levels and a long tail of high values. This violates the normality assumption of linear models.
+As shown in the histogram, the distribution of **iica** is heavily right-skewed, with the vast majority of municipalities reporting very low conflict levels and a long tail of high values. This violates the normality assumption of linear models.
 
-Log Transformation: To normalize the distribution and improve model fit, we applied a log transformation to iica:
+Log Transformation: To normalize the distribution and improve model fit, we applied a log transformation to **iica**:
 
 The log-transformed outcome is much closer to a normal distribution, making it more suitable for regression analysis. This transformation also helps interpret model coefficients in terms of proportional effects on conflict intensity.
 
@@ -308,16 +369,14 @@ hist(joined_sf$iica, nclass=50)
 hist(log(joined_sf$iica), nclass=50)
 ```
 
-
 # Regression models
 
 ## Initial (Non-Spatial) Regression Model
-We first estimated a baseline linear regression model to assess whether municipal-level socio-economic indicators predict conflict intensity (log(iica)).
+We first estimated a baseline linear regression model to assess whether municipal-level socio-economic indicators predict conflict intensity **(log(iica))**.
 
 - Significant predictors: coca cultivation, displacement, and GDP per capita.
 - Model fit: R² = 0.13 (modest explanatory power).
 - Assumptions: The residuals show patterns of spatial autocorrelation, indicating a violation of the independence assumption.
-
 
 ```{r regression-model}
 # Filter rows without NAs (just in case)
@@ -338,17 +397,16 @@ model1 <- lm(formula = formula, data = joined_clean, na.action = na.omit)
 summary(model1)
 ```
 
-
 # Spatial Autocorrelation of Residuals
 To assess whether spatial dependence remains in the residuals of the non-spatial regression model, we applied Moran’s I test.
 
-Results:
+### Results
 Moran’s I = 0.367
 p-value < 2.2e-16
 Statistically significant positive spatial autocorrelation
 This result confirms that the residuals are not randomly distributed in space, violating the assumption of independence and suggesting spatial spillover effects.
 
-Residuals vs. Lagged Residuals Plot
+## Residuals vs. Lagged Residuals Plot
 The upward trend in this scatterplot supports the Moran’s I result, showing that municipalities with high (or low) residuals tend to be surrounded by neighbors with similar residuals.
 Conclusion: A spatial regression model is needed to capture this remaining autocorrelation.
 
@@ -361,8 +419,8 @@ wts <- joined_clean |>
 # use Morans I test if there is still autocorrelation in our residuals
 moran.test(model1$residuals, wts)
 ```
+
 ```{r residual-dist23}
-library(ggplot2)
 residuals_model1 <- residuals(model1)
 lagged_residuals_model1 <- lag.listw(wts, residuals_model1)
 
@@ -377,16 +435,14 @@ ggplot(res, aes(x = residuals, y = lagged_residuals)) +
 ## 1. Spatially Lagged X Model (SLX)
 To account for potential spatial spillovers of the independent variables, we estimated an SLX model, which augments the standard OLS specification by including spatially lagged covariates.
 
-Key Findings:
-Variable	Coefficient	p-value	Significant?	Interpretation
-H_coca	+0.0001355	0.0027	✅ Yes	More coca cultivation in a municipality → higher conflict.
-lag.H_coca	+0.0002094	0.0027	✅ Yes	Coca cultivation in neighboring municipalities also increases conflict.
-e_desplaza	+0.0001514	1.34e-05	✅ Yes	More forced displacement → higher conflict.
-lag.e_desplaza	+0.0004112	9.30e-10	✅ Yes	Neighboring displacement also increases conflict.
-gdp_pc & lag.gdp_pc	n.s.	> 0.1	❌ No	Economic performance not a significant predictor.
-fisc_perf & lag.fisc_perf	n.s.	> 0.1	❌ No	Fiscal performance is not associated with conflict.
+### Key Findings
+The analysis reveals several significant predictors of conflict at the municipal level. Coca cultivation is strongly associated with higher conflict: both local cultivation **(H_coca, p = 0.0027)** and cultivation in neighboring municipalities **(lag.H_coca, p = 0.0027)** significantly increase conflict intensity. This suggests that coca-related dynamics are not only locally impactful but also diffuse across municipal borders.
 
-📌 Interpretation:
+Similarly, forced displacement plays a significant role. An increase in displacement within a municipality **(e_desplaza, p < 0.0001)** and in neighboring areas **(lag.e_desplaza, p < 0.000000001)** both correspond to heightened conflict levels, indicating that displacement may both reflect and reinforce conflict patterns across space.
+
+In contrast, economic and fiscal performance show no statistically significant association with conflict. Neither GDP per capita (gdp_pc and its lag) nor fiscal performance (fisc_perf and its lag) reached significance **(p > 0.1)**, suggesting that structural economic indicators are not strong predictors of local conflict in this context.
+
+### Interpretation
 - Coca cultivation and displacement have both local and spatial spillover effects, indicating that conflict intensity is influenced not only by conditions within a municipality but also by those of its neighbors.
 - Economic and fiscal indicators show no significant direct or spillover effects in this specification.
 
@@ -405,50 +461,47 @@ formula <- formula(log(iica) ~ gdp_pc + H_coca + fisc_perf + e_desplaza)
 slx_model <- lmSLX(formula, data = joined_clean, listw = wts, zero.policy = TRUE)
 summary(slx_model)
 ```
-Direct and Indirect Effects
+### a) Direct and Indirect Effects
 
 To better interpret the coefficients of the SLX model, we compute impacts, which decompose the estimated effects into:
 - Direct effects: The impact of a predictor on conflict within the same municipality.
 - Indirect effects (spillovers): The effect of that predictor in neighboring municipalities.
 - Total effect: Sum of direct + indirect.
 
-Summary of Impacts
-Variable	Direct Effect	Indirect Effect	Total Effect	Significant?
-gdp_pc	-0.00097	-0.00046	-0.00143	❌ No
-H_coca	+0.00014	+0.00021	+0.00035	✅ Yes
-fisc_perf	-0.00632	-0.00139	-0.00771	❌ No
-e_desplaza	+0.00015	+0.00041	+0.00056	✅ Yes
+### b) Summary of Impacts
+The decomposition of effects reveals that coca cultivation **(H_coca)** and forced displacement **(e_desplaza)** both have statistically significant impacts on conflict, not only within municipalities but also through spatial spillovers. Specifically, coca cultivation shows a direct effect of **+0.00014** and an indirect (spillover) effect of +0.00021, resulting in a total effect of **+0.00035**. Similarly, forced displacement has a direct effect of +0.00015 and an indirect effect of **+0.00041**, leading to a total effect of **+0.00056**. These results underscore the spatial diffusion of conflict drivers: activities in one municipality influence conflict levels in neighboring areas.
 
-Interpretation
-- Coca cultivation (H_coca) and forced displacement (e_desplaza) show statistically significant direct and spillover effects.
+In contrast, economic performance **(gdp_pc)** and fiscal performance **(fisc_perf)** do not exhibit statistically significant effects. For gdp per capita, the total effect is a small negative **(-0.00143)**, but it is not significant. Fiscal performance shows a slightly larger negative total effect **(-0.00771)**, but this too lacks statistical significance. These findings suggest that structural economic and governance indicators may not directly or indirectly drive conflict intensity in this context.
+
+### c) Interpretation
+- Coca cultivation **(H_coca)** and forced displacement **(e_desplaza)** show statistically significant direct and spillover effects.
 - This confirms that conflict intensity is influenced not only by internal municipal conditions but also by dynamics in neighboring areas.
 - GDP per capita and fiscal performance show small and non-significant effects in both direct and indirect terms.
 
 ```{r slx-impact}
 summary(impacts(slx_model))
 ```
+## Moran's Test on SLX model Residuals
 To verify whether the SLX model sufficiently accounts for spatial dependence, we ran Moran's I test on its residuals.
-
-Result:
-Moran’s I statistic: 0.346
-p-value: < 2.2e-16
-
-Conclusion: Residuals still exhibit significant positive spatial autocorrelation.
-
-Interpretation:
-Despite including spatially lagged predictors, the SLX model fails to fully capture spatial dependence. This suggests the need for models that account for spatial dependence in the dependent variable or error term, such as the SAR (spatial lag) or SEM (spatial error) models.
 
 ```{r slx-autoregression}
 moran.test(slx_model$residuals, wts)
 ```
+
+### Result
+Moran’s I statistic: 0.346
+p-value: < 2.2e-16
+
+### Conclusion 
+Residuals still exhibit significant positive spatial autocorrelation.
+
+### Interpretation
+Despite including spatially lagged predictors, the SLX model fails to fully capture spatial dependence. This suggests the need for models that account for spatial dependence in the dependent variable or error term, such as the SAR (spatial lag) or SEM (spatial error) models.
+
 ## 2. Spatial Lag Model (SAR)
 To address the limitations of the SLX model, we estimate a Spatial Lag Model (SAR) using Maximum Likelihood.
 
-
-
-
-
-Key Findings:
+### Key Findings
 
 Spatial dependence (Rho) is strong and highly significant:
 ρ = 0.576, p < 0.001 → confirms that conflict levels in neighboring municipalities are positively correlated.
@@ -457,16 +510,15 @@ H_coca (Coca cultivation): positive effect, p < 0.001
 e_desplaza (Forced displacement): positive effect, p < 0.001
 gdp_pc and fisc_perf are not significant
 
-Model fit improvements:
+### Model fit improvements
 AIC reduced from 3574.7 (OLS) to 3289.6 (SAR)
 Nagelkerke pseudo-R² = 0.356
 
-Remaining issues:
-LM test for residual autocorrelation still significant (p < 0.001) → suggests some spatial structure remains in the residuals.
+### Remaining issues
+LM test for residual autocorrelation still significant **(p < 0.001)** → suggests some spatial structure remains in the residuals.
 
-Interpretation:
+### Interpretation
 This model captures spatial spillover in the dependent variable, indicating that conflict intensity is not only influenced by local conditions but also by those in adjacent municipalities. However, residual autocorrelation persists—motivating exploration of a Spatial Error Model (SEM) next.
-
 
 ```{r slm}
 # spatial lag models
@@ -478,18 +530,16 @@ lag_model <- lagsarlm(
   )
 summary(lag_model, Nagelkerke = TRUE)
 ```
-
-The spatial lag model includes both direct and indirect (spillover) effects of predictors on conflict intensity (log-transformed iica). The estimated spatial autoregressive coefficient (ρ = 0.576, p < 0.001) indicates a strong and significant spatial dependence, justifying the model choice.
+The spatial lag model includes both direct and indirect (spillover) effects of predictors on conflict intensity (log-transformed **iica**). The estimated spatial autoregressive coefficient **(p = 0.576, p < 0.001)** indicates a strong and significant spatial dependence, justifying the model choice.
 
 Direct effects reflect the impact within a municipality, while indirect effects capture spillover effects on neighboring municipalities. Total effects are the sum of both.
 
 Interpretation
-H_coca and e_desplaza have statistically significant total effects, indicating both local and spillover influences on conflict intensity.
-gdp_pc and fisc_perf do not exhibit statistically significant effects under this model.
-The spatial lag (ρ) is strong and significant, validating the presence of spatial dependence in the outcome.
+**H_coca** and **e_desplaza** have statistically significant total effects, indicating both local and spillover influences on conflict intensity.
+**gdp_pc** and **fisc_perf** do not exhibit statistically significant effects under this model.
+The spatial lag (p) is strong and significant, validating the presence of spatial dependence in the outcome.
 
 ```{r slm-impacts}
-
 imp <- impacts(lag_model, listw = wts, R=100) # compute impacts
 imp
 ```
@@ -512,26 +562,17 @@ Conclusion: The absence of spatial autocorrelation in the residuals confirms tha
 moran.test(lag_model$residuals, wts)
 ```
 
-## Spatial Error Model (SEM)
+## 3. Spatial Error Model (SEM)
 The SEM accounts for unobserved spatial processes by modeling spatial autocorrelation in the error term, rather than in the dependent variable directly.
 
-Key Results
-Lambda (spatial error coefficient): 0.621
-→ Highly significant (p < 2.2e-16), confirming the presence of spatial error dependence.
-AIC: 3302.5
-→ Lower than OLS (3574.7) but slightly higher than spatial lag model (3289.6).
-Pseudo-R²: 0.347
-→ Indicates a better model fit than OLS (0.1335).
+### Key Results
+The spatial error coefficient (**lambda**) is estimated at **0.621** and is highly significant **(p < 2.2e-16)**, indicating strong evidence of spatial error dependence—that is, unobserved factors influencing conflict are spatially correlated across municipalities.
 
-Variable Significance
-Variable	Coefficient	p-value	Significant?
-Intercept	-3.6646	< 0.001	✅ Yes
-gdp_pc	-0.00127	0.3593	❌ No
-H_coca	0.000123	0.00145	✅ Yes
-fisc_perf	0.000301	0.9383	❌ No
-e_desplaza	0.000097	0.0012	✅ Yes
+In terms of model fit, the Akaike Information Criterion (AIC) for the spatial error model is **3302.5**, which is substantially lower than the OLS model’s AIC of 3574.7, indicating a much better fit. However, it is slightly higher than the AIC for the spatial lag model (**3289.6**), suggesting the spatial lag may fit the data marginally better. The pseudo-R² of **0.347** further supports improved performance over the OLS model, which had a considerably lower R² of **0.1335**.
 
-Interpretation:
+Regarding the significance of individual variables, both coca cultivation **(H_coca)** and forced displacement (e_desplaza) remain significant predictors of conflict, with p-values of **0.00145** and **0.0012**, respectively. In contrast, economic performance **(gdp_pc)** and fiscal performance **(fisc_perf)** are not statistically significant, with p-values of 0.3593 and 0.9383, respectively. The intercept is significant **(p < 0.001)**, reflecting a non-zero baseline level of conflict even when all predictors are at zero.
+
+### Interpretation
 The SEM improves model fit and confirms that displacement and coca cultivation are positively associated with higher conflict intensity. However, the slightly higher AIC compared to the spatial lag model suggests the lag model remains the best fit overall.
 
 ```{r sem}
@@ -546,20 +587,19 @@ summary(error_model, Nagelkerke = TRUE)
 
 To evaluate whether the spatial error model effectively captures spatial dependence, we assess spatial autocorrelation in its residuals using Moran’s I.
 
-Results:
+### Results
 Moran’s I statistic: -0.055
 p-value: 0.996
 Interpretation: No significant spatial autocorrelation remains in the residuals.
 
-Conclusion:
+### Conclusion
 The SEM successfully removes residual spatial dependence, confirming it is a valid model specification that appropriately accounts for latent spatial processes.
 
 ```{r sem-morans}
 moran.test(error_model$residuals, wts)
 ```
 
-
-#### Model Comparison: Lagrange Multiplier (LM) Tests
+# Model Comparison and Selection
 
 To determine whether a spatial lag or spatial error model is more appropriate, we conducted LM tests on the OLS model residuals.
 
@@ -577,16 +617,12 @@ lm.LMtests(
   # LM error, LM lag
 )
 ```
+To determine the most suitable model for capturing spatial dynamics in conflict intensity, we applied the following tests:
 
-##Robust Lagrange Multiplier (LM) Tests
+## 1. Robust Lagrange Multiplier (LM) Tests
 
 We ran robust versions of the LM tests to determine which spatial model is more appropriate when both LM-Lag and LM-Error are initially significant.
 
-Results:
-Robust LM Error: adjRSer = 0.058, p-value = 0.8099
-Robust LM Lag: adjRSLag = 57.136, p-value = 4.06e-14
-
-Interpretation:
 Only the Robust LM Lag test is statistically significant. This confirms that the spatial lag model (SAR) is the most appropriate specification for capturing spatial dependence in our data.
 
 ```{r lagrange_robust}
@@ -597,23 +633,21 @@ lm.LMtests(
   # robust LM error, robust LM lag
 )
 ```
-Model Comparison and Selection
-To determine the most suitable model for capturing spatial dynamics in conflict intensity, we used multiple criteria:
-
-1. Robust Lagrange Multiplier Tests
-These tests help assess whether spatial dependence is best captured through a spatial lag (SAR) or a spatial error (SEM) specification.
+These tests helped assess whether spatial dependence is best captured through a spatial lag (SAR) or a spatial error (SEM) specification.
 Robust LM Lag: Significant (p < 0.001)
 Robust LM Error: Not significant (p = 0.81)
 
-Interpretation: Strong evidence favors the spatial lag model (SAR), as it captures spatial spillovers in the outcome variable.
+### Interpretation
+Strong evidence favors the spatial lag model (SAR), as it captures spatial spillovers in the outcome variable.
 
-2. Akaike Information Criterion (AIC)
+## 2. Akaike Information Criterion (AIC)
 Interpretation: Both spatial models drastically outperform the non-spatial OLS baseline.
 The SAR model has the lowest AIC, indicating the best trade-off between fit and model complexity.
-
-Final Decision:
-Based on both the Robust LM tests and AIC, the spatial lag model (SAR) provides the best specification for modeling spatial dependence in municipal-level conflict intensity in Colombia.
 
 ```{r AIC}
 AIC(model1, lag_model, error_model)
 ```
+
+## Final Decision
+Based on both the Robust LM tests and AIC, the spatial lag model (SAR) provides the best specification for modeling spatial dependence in municipal-level conflict intensity in Colombia.
+
