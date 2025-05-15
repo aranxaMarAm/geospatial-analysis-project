@@ -8,6 +8,7 @@ This project investigates the spatial dynamics of armed conflict in Colombia by 
 <p align="center">
   <img src="poster.jpg" alt="Project Poster" width="600">
 </p>
+
 ------------------------------------------------------------------------
 
 **Authors:**\
